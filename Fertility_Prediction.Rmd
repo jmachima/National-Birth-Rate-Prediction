@@ -1,0 +1,463 @@
+---
+PREDICTING FERTILITY RATE BY COUNTRY USING RANDOM FOREST REGRESSION
+
+By Jasmine Machima
+
+jasmine.machima@gmail.com
+---
+
+
+```{r}
+#Calling various packages
+pacman::p_load(pacman, dplyr, GGally, ggplot2, ggthemes, ggvis, httr, lubridate, plotly, rio, rmarkdown, shiny, stringr, tidyr)
+
+```
+
+```{r}
+library(randomForest)
+library(Metrics)
+library(dplyr)
+library(psych)
+library(ggplot2)
+library(ggcorrplot)
+library(reshape2)
+
+# FERTILITY - Average number of children per woman 
+              # from https://data.worldbank.org/indicator/SP.DYN.TFRT.IN
+
+
+df <- as.data.frame(import("Fertility_Master.csv"))
+
+print(df)
+
+# Scale feature values so that their mean is 0 and variance is 1.
+sdf <- as.data.frame(scale(df[3:12])) # at this point, everything beyond the 12th column is not yet used.
+sdf <- cbind(df[2],sdf)  # column 2 is the fertility value (no. of children per woman)
+
+
+rsq <- function (x, y) cor(x, y) ^ 2 # Root mean square function setup
+
+# Function for Random Forrest Regression
+RF_func <- function(x, sp, DF){
+  set.seed(x)
+  split <- sample(c(rep(0, sp * nrow(DF)), rep(1,(1-sp) * nrow(DF))))
+  train <- DF[split == 0, ]   
+  test <- DF[split == 1, ]
+  RF_res <- randomForest(formula = fertility ~ ., data = train, mtry = 7, ntree=1000,
+                        importance = TRUE)
+  
+}
+
+MyTrainSplit <-function(x, sp, DF){
+  set.seed(x)
+  split <- sample(c(rep(0, sp * nrow(DF)), rep(1,(1-sp) * nrow(DF))))
+  train <- DF[split == 0, ]
+}
+MyTestSplit <-function(x, sp, DF){
+  set.seed(x)
+  split <- sample(c(rep(0, sp * nrow(DF)), rep(1,(1-sp) * nrow(DF))))
+  test <- DF[split == 1, ]
+}
+
+# Set up a correlation heatmap.
+cormat <- round(x = cor(df[3:12]), digits = 2)
+
+melted_cormat <- melt(cormat)
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill = value)) +
+  geom_tile() + theme(axis.text.x = element_text(angle=90), axis.text.y = element_text(angle=0))
+
+```
+Except for the female and male body mass indices (BMI), none of other features show any strong correlations to one another. All will be included in the regression analysis while men's BMI and women's BMI will still be considered independent attributes. For some countries, average female and male BMI values may show a large gap.
+
+The following attributes were gathered from several sources, with the majority from https://data.worldbank.org/ THERE WERE SOME MISSING DATA POINTS THAT HAD TO BE ESTIMATED BY USING DATA FROM SIMILAR COUNTRIES.
+
+W15_to_44 -> Percentage of women in the 15 to 44 years age bracket for a country. 
+             Worldbank data
+
+gdp -> GDP per capita from WorldBank https://data.worldbank.org/indicator/SP.DYN.TFRT.IN
+
+
+Alcohol_Cons -> Alcohol consumption per capita in liters of pure alcohol per year from Worldbank data
+                https://data.worldbank.org/indicator/SP.DYN.TFRT.IN
+
+
+pml -> Paid maternity leave, 4 - Most generous, 0 - no paid maternity leave guaranteed by law
+       https://worldpolicycenter.org/policies/is-paid-leave-available-for-mothers-of-infants
+       
+Guaranteed -> Guaranteed job positions by law for women after maternity leave. 
+              yes is 1, no is 0. From https://data.worldbank.org/indicator/SG.MMR.LEVE.EP
+              
+unem -> Unemployment Percentage from https://data.worldbank.org/indicator/SG.MMR.LEVE.EP
+
+Density -> Population density (people/ squared kilometers) by country 
+           from https://data.worldbank.org/indicator/EN.POP.DNST
+
+urbanization -> Percentage of population that live in cities
+                https://data.worldbank.org/indicator/SP.URB.TOTL.IN.ZS
+
+Mean_BMI_women -> Mean body mass index for women from ourworldindata.org/obesity
+
+Mean_BMI_men -> Mean body mass index for men from ourworldindata.org/obesity
+
+Access_Degree -> Degree of abortion access, Least restricted = 4, Most restricted = 0
+                 compiled from reproductiverights.org's World Abortion Map
+                 
+Additional attributes to be used later are shown below.
+
+The availability of these data are limited. Not all countries published them (slightly over a hundred nations). When more than half of the countries are dropped, the limited data can be used.
+
+Social_Support -> social support 
+                  https://en.wikipedia.org/wiki/World_Happiness_Report#2019_World_Happiness_Report
+
+Freedom_of_choices -> freedom to make life choices
+                      https://en.wikipedia.org/wiki/World_Happiness_Report#2019_World_Happiness_Report
+
+Age_at_1st_Child ->  Average age at which women have their first child
+                     https://www.cia.gov/library/publications/the-world-factbook/fields/352.html 
+                     also additional data from individual countries
+
+Divorce_Percentage -> percentage of marriages that end in divorces.
+                      From https://en.wikipedia.org/wiki/Divorce_demography
+
+
+
+```{r}
+# Prepare a data frame to keep root mean square accuracy values for different seeds.
+l <- as.data.frame(c(1:100))
+names(l) <- "rd" # column to keep seed state or random state numbers
+l$Rsq <- 0 # column for storing accuracy values
+
+for (x in 1:100) {
+  R_fer <- RF_func(x, 0.75, sdf)   # 75% train %25 test split for random forest function
+  test <- MyTestSplit(x, 0.75, sdf)
+  y_test <- predict(R_fer, test) # evaluate the RF model on the test set.
+  tst <- as.data.frame.array(test[1]) # first column is the actual fertility values
+  R2 <- rsq(tst, y_test) # root mean square value
+  l[x,"Rsq"] <- R2
+}
+
+print(paste("Averaged Root Mean Square Accuracy",round(mean(l$Rsq),3)))
+# averaged all the R-square values from different random states.
+
+rowmax <- which(l$Rsq == max(l$Rsq), arr.ind=TRUE) # seed state with greatest accuracy
+print(paste("Split with max Rsq is at seed", rowmax))
+ 
+```
+
+```{r}
+
+# Random Forrest model with highest R-square value
+
+R_fer_max <- RF_func(rowmax, 0.75, sdf)
+test_max <- MyTestSplit(rowmax, 0.75, sdf)
+y_test_max <- predict(R_fer_max, test_max)
+
+# "importance" function comes with the random forest package and is used for evaluating the relative importance of each feature in the data set.
+importance(R_fer_max)
+varImpPlot(R_fer_max)
+
+Imp <- as.data.frame(importance(R_fer_max)) # cast "importance" into a data frame
+names(Imp) <- c("Percent_IncMSE","IncNodePurity")
+Imp$Att <- row.names(Imp) # new column to show feature names
+
+Imp_s <- Imp
+row.names(Imp_s) <- c(1:(dim(Imp_s)[1])) # rename the rows with numerics
+
+IMP <- Imp_s[order(-Imp_s$Percent_IncMSE),] # order the rows with Percent_IncMSE descending
+
+# Importance of features in descending order
+IMP
+
+TST <- MyTestSplit(rowmax, 0.75, df) # new data frame for test data with unscaled values.
+
+# combine the predicted values with the unscaled data frame (test portion)
+TST <- cbind(TST,y_test_max) 
+
+TST
+```
+```{r}
+
+plot(TST$W15_to_44,TST$fertility, type="p", col="green", pch="o", lty=1, ylim=c(0,6), ylab="Fertility (children per woman", xlab = "% of Women in 15-44 Years Age Range",main="Actual Fertility and Prediction")
+
+points(TST$W15_to_44, TST$y_test_max, col="brown", pch="*")
+
+legend(57,6,legend=c("Actual","Predicted"), col=c("green","brown"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(TST$gdp,TST$fertility, type="p", col="blue", pch="o", lty=1, xlim = c(0,10000), ylim=c(0,6), ylab="Fertility (children per woman", xlab = "GDP per Capita ($)",main="Actual Fertility and Prediction" )
+
+points(TST$gdp, TST$y_test_max, col="red", pch="*")
+
+legend(150000,6,legend=c("Actual","Predicted"), col=c("blue","red"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(TST$Mean_BMI_men,TST$fertility, type="p", col="orange", pch="o", lty=1, ylim=c(0,6), ylab="Fertility (children per woman", xlab = "Male BMI Index (average)",main="Actual Fertility and Prediction" )
+
+points(TST$Mean_BMI_women, TST$y_test_max, col="purple", pch="*")
+
+legend(29,6,legend=c("Actual","Predicted"), col=c("orange","purple"),
+                                   pch=c("o","*"), ncol=1)
+```
+
+
+
+Construct a model for countries which are generally struggling withlow birth rates.
+
+```{r}
+
+LOW <- subset(df, fertility <= 2.7) # Select only countries with birth rates <=2.7
+
+#This lower fertility rate distribution is the one that governments are interested in as many are facing population decline and have not been successful with their strategies.
+
+print("dimensions of filtered table")
+dim(LOW)
+
+rownames(LOW) <- 1:nrow(LOW)
+LOW
+
+# There was another training run with all countries originally in the LOW table. 
+# Outliers were spotted and marked for removal.
+
+# Drop the following countries: UAE row 4, France 45, Georgia 47, Sri Lanka 75, Nepal 96, Thailand 121
+lowset <- LOW %>% slice(-c(4, 45,47, 75, 96,121))
+lowset <- lowset %>% drop_na() # drop any rows with N/A entries.
+
+main <- as.data.frame(scale(lowset[3:17]))
+main <- cbind(lowset[2],main)
+
+Main <- main %>% drop_na()
+
+print(dim(Main))
+
+Main
+
+R2_low <- as.data.frame(c(1:100)) # R-square table for the low fertility series
+names(R2_low) <- "rd" 
+R2_low$Rsq <- 0
+
+for (x in 1:100) {
+  
+  R_fer_l <- RF_func(x, 0.75, Main)
+  Test <- MyTestSplit(x, 0.75,Main)
+  y_Test <- predict(R_fer_l, Test)
+  tst <- as.data.frame.array(Test[1])
+  R2 <- rsq(tst, y_Test)
+  R2_low[x,"Rsq"] <- R2
+  
+
+}
+
+rowmax2 <- which(R2_low$Rsq == max(R2_low$Rsq), arr.ind=TRUE)
+
+print(paste("Averaged Root Mean Square Accuracy",round(mean(R2_low$Rsq),3)))
+print(paste("Maximum Root Mean Square Accuracy found at seed number = ", rowmax2,"with value", round(max(R2_low$Rsq),3)))
+
+# Now, let's look at the random states with good results (Rsq >= 0.8)
+rowhigh <- which(R2_low$Rsq >= 0.8, arr.ind=TRUE)
+rowhigh
+
+
+```
+
+```{r}
+# use the last R_fer_l model (x=100) to start a new data frame
+I_tot <- as.data.frame(importance(R_fer_l))
+names(I_tot) <- c("Percent_IncMSE","IncNodePurity")
+I_tot$Att <- row.names(I_tot)
+row.names(I_tot) <- c(1:(dim(I_tot)[1]))
+I_tot
+I_total <- I_tot[1]
+I_total$Percent_IncMSE <- NULL
+
+I_total
+
+
+i = 1 # first "importance" column for the 1st random state in the high accuracy group.
+for (z in rowhigh){
+  I <- as.data.frame(importance(RF_func(z, 0.75, Main)))
+  names(I) <- c("Percent_IncMSE","IncNodePurity")
+  I_total[i] <- as.data.frame(I$Percent_IncMSE)
+  i <- i+1
+}
+
+# Take the mean of the importance of each feature available for the model
+# start a new data frame
+importance_mean <- as.data.frame(rowMeans(I_total, na.rm=TRUE)) # taking the mean for each feature (row)
+names(importance_mean) <- c("Mean_Percent_IncMSE")
+
+importance_mean$Att <- I_tot$Att # Add a column with the name of each feature.
+importance_mean = importance_mean[ , c(2,1)] # re-arrange columns
+
+# Now order all rows with descending "Mean_Percent_IncMSE" 
+importance_mean = importance_mean[order(-importance_mean$Mean_Percent_IncMSE),]
+importance_mean
+```
+```{r}
+print("The most important attributes for low fertility countries are:")
+print(importance_mean$Att[1:8])
+```
+NEXT:
+Randon Forest model using a selected group of features shown above.
+```{r}
+
+# Prepare another data frame for Rsq values.
+R2_select <- as.data.frame(c(1:100))
+names(R2_select) <- "rd"
+R2_select$Rsq <- 0
+
+for (x in 1:100) {
+  set.seed(x)
+  split <- sample(c(rep(0, 0.75 * nrow(Main)), rep(1, 0.25 * nrow(Main))))
+  train <- Main[split == 0, ]   
+  test <- Main[split == 1, ]
+  R_select <- randomForest(formula = fertility ~ (W15_to_44 + Age_at_1st_Child + Density + Mean_BMI_women + Divorce_Percent + Alcohol_Cons + Freedom_of_choices + gdp) , data = train, mtry = 4, ntree=1000,
+                        importance = TRUE, na.action = na.omit)
+  y_test <- predict(R_select, test)
+  tst <- as.data.frame.array(test[1])
+  R2 <- rsq(tst, y_test)
+  R2_select[x,"Rsq"] <- R2
+}
+
+print(paste('Mean Rsq:',round(mean(R2_select$Rsq),3)))
+print(paste('Max Rsq:',round(max(R2_select$Rsq),3)))
+print(which(R2_select$Rsq == max(R2_select$Rsq), arr.ind=TRUE))
+seed_max <- which(R2_select$Rsq == max(R2_select$Rsq), arr.ind=TRUE)
+
+print(R2_select)
+
+
+```
+
+```{r}
+SEED = seed_max
+
+train <- MyTrainSplit(SEED, 0.75, Main)
+test <- MyTestSplit(SEED, 0.75, Main)
+
+# Examine the model with highest accuracy.
+R_select_max <- randomForest(formula = fertility ~ (W15_to_44 + Age_at_1st_Child + Density + Mean_BMI_women +  Divorce_Percent + Alcohol_Cons + Freedom_of_choices + gdp) , data = train, mtry = 4, ntree=1000, importance = TRUE, na.action = na.omit)
+
+predicted_max <- predict(R_select_max, test)
+
+# Data frame for the test set with unscaled feature values.
+maxtest <- MyTestSplit(SEED, 0.75, lowset)  
+
+maxtest <- cbind(maxtest,predicted_max)
+maxtest
+
+varImpPlot(R_select_max)
+
+# Comparing the 8 selected features using the highest-accuracy model.
+Imp_select <- as.data.frame(importance(R_select_max))
+names(Imp_select) <- c("Percent_IncMSE", "Node_purity")
+
+Imp_select = Imp_select[order(-Imp_select$Percent_IncMSE),]
+Imp_select
+```
+
+```{r}
+plot(maxtest$W15_to_44,maxtest$fertility, type="p", col="blue", pch="o", lty=1, ylim=c(0,3), ylab="Fertility (children per woman)", xlab = "% of Women in 15 to 44 age range", main = "Actual & Predicted Fertility vs. % of Women in 15 to 44 age range" )
+     
+points(maxtest$W15_to_44,maxtest$predicted_max, col="red", pch="*")
+
+legend(48.5,0.8,legend=c("Actual","Predicted"), col=c("blue","red"),
+                                   pch=c("o","*"), ncol=1)
+
+
+plot(maxtest$Age_at_1st_Child,maxtest$fertility, type="p", col="orange", pch="o", lty=1, ylim=c(1,3), ylab="Fertility (children per woman)", xlab = "Woman's Age at 1st Child", main="Actual & Predicted Fertility vs. Woman's Age at 1st Child" )
+
+points(maxtest$Age_at_1st_Child, maxtest$predicted_max, col="purple", pch="*")
+
+legend(29,2.75,legend=c("Actual","Predicted"), col=c("orange","purple"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(maxtest$Density,maxtest$fertility, type="p", col="brown", pch="o", lty=1, ylim=c(1,3),xlim = c(0,300),   ylab="Fertility (children per woman)", xlab = "Density (population per square km)", main = "Actual & Predicted Fertility vs. Population Density" )
+
+points(maxtest$Density, maxtest$predicted_max, col="blue", pch="*")
+
+legend(200,2.6,legend=c("Actual","Predicted"), col=c("brown","blue"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(maxtest$Mean_BMI_women,maxtest$fertility, type="p", col="green", pch="o", lty=1, ylim=c(1,3), ylab="Fertility (children per woman)", xlab = "Female BMI", main = "Actual & Predicted Fertility vs. Mean BMI for Women"  )
+
+points(maxtest$Mean_BMI_women, maxtest$predicted_max, col="magenta", pch="*")
+
+legend(25,3,legend=c("Actual","Predicted"), col=c("green","magenta"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(maxtest$Divorce_Percent,maxtest$fertility, type="p", col="black", pch="o", lty=1, ylim=c(1,3), ylab="Fertility (children per woman)", xlab = "Divorce Percentage", main="Actual & Predicted Fertility vs. Divorce Percentage"  )
+
+points(maxtest$Divorce_Percent, maxtest$predicted_max, col="brown", pch="*")
+
+legend(45,2.9,legend=c("Actual","Predicted"), col=c("black","brown"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(maxtest$gdp,maxtest$fertility, type="p", col="navy", pch="o", lty=1, ylim=c(1,3), ylab="Fertility (children per woman)", xlab = "GDP per Capita ($)", main="Actual & Predicted Fertility vs. GDP per Capita"  )
+
+points(maxtest$gdp, maxtest$predicted_max, col="magenta", pch="*")
+
+legend(70000,2.9,legend=c("Actual","Predicted"), col=c("navy","magenta"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(maxtest$Alcohol_Cons,maxtest$fertility, type="p", col="violet", pch="o", lty=1, ylim=c(1,3), ylab="Fertility (children per woman)", xlab = "Alcohol Consumption", main="Actual & Predicted Fertility vs. Alcohol Consumption"  )
+
+points(maxtest$Alcohol_Cons, maxtest$predicted_max, col="green", pch="*")
+
+legend(1,3,legend=c("Actual","Predicted"), col=c("violet","green"),
+                                   pch=c("o","*"), ncol=1)
+
+plot(maxtest$Freedom_of_choices,maxtest$fertility, type="p", col="red", pch="o", lty=1, ylim=c(1,3), ylab="Fertility (children per woman)", xlab = "Freedom of Choices Score", main="Actual & Predicted Fertility vs. Freedom of Choices" )
+
+points(maxtest$Freedom_of_choices, maxtest$predicted_max, col="black", pch="*")
+
+legend(0.2,2.9,legend=c("Actual","Predicted"), col=c("red","black"),
+                                   pch=c("o","*"), ncol=1)
+```
+What influences women to have children at a later age?
+```{r}
+
+# Age at first child will now be the target output. No fertility data included.
+# All available features will be used.
+Age <- Main[2:16]
+Age <- Age[ , c(14,c(1:13),15)] # Re-arrange column order. column 14 was "Age at 1st Child"
+
+z = 99
+TrAge <- MyTrainSplit(z, 0.75, Age)
+TstAge <- MyTestSplit(z, 0.75, Age)
+  
+RF_Age <- randomForest(formula = Age_at_1st_Child ~ (Mean_BMI_women +  Divorce_Percent +  
+                                                         Alcohol_Cons + Freedom_of_choices + 
+                                                         Density + Access_Degree + unem +
+                                                         urbanization + Mean_BMI_men + 
+                                                         Social_Support + pml + Guaranteed + gdp), 
+                      data = TrAge, mtry = 7, ntree=1000, importance = TRUE, na.action = na.omit)
+  
+y_test_age <- predict(RF_Age, TstAge)
+tst_age <- as.data.frame.array(TstAge[1])
+R2 <- rsq(tst_age, y_test_age)
+print(paste('seed state:',z,'R-square:',round(R2,3)))
+
+  
+Age_Imp <- as.data.frame(importance(RF_Age))
+names(Age_Imp) <- c("Percent_IncMSE", "Node_purity")
+
+Age_Imp = Age_Imp[order(-Age_Imp$Percent_IncMSE),]
+
+print(Age_Imp)
+```
+```{r}
+plot(lowset$Freedom_of_choices,lowset$Age_at_1st_Child, col="blue",ylab="Maternal Age at 1st Child", xlab = "Freedom of Choices Score", main="Maternal age at first child for all countries" )
+
+```
+
+GDP is the biggest factor influencing the age of first-time mothers but, naturally, no countries have any desire to lower their GDP.
+
+Although Access_Degree (for abortions) is a big factor, it must not be reduced in countries where abortion access is already adequate.
+
+When the level of "Freedom of Choices" is high, there seems to be an even distribution of age at 1st child from young mother's ages to older maternal ages. It appears would-be mothers can choose when to start having children or to have none at all to suit their personal lifestyle.
+
+Mean BMIs are strongly country-dependent in general and probably have resulted from complex interactions between ethnicities, culture, and economic situations.  It is difficult to say whether BMI itself has a direct influence on fertility or on average mother's age when her first child is born.
+
+Needless to say, trying to reduce the divorce percentage will be extremely difficult.
+
+Thus, the strongest changeable factor is "Freedom of Choices". This is when families can choose to have children early if they want to.
